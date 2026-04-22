@@ -416,9 +416,10 @@
           <th onclick="sortProg(0)">Programa <span class="sort-arrow">↕</span></th>
           <th onclick="sortProg(1)">Modalidad <span class="sort-arrow">↕</span></th>
           <th class="num" onclick="sortProg(2)">Inversión <span class="sort-arrow">↕</span></th>
-          <th class="num" onclick="sortProg(3)">Leads <span class="sort-arrow">↕</span></th>
-          <th class="num" onclick="sortProg(4)">Matrículas <span class="sort-arrow">↕</span></th>
-          <th class="num" onclick="sortProg(5)">% Conv. <span class="sort-arrow">↕</span></th>
+          <th class="num" onclick="sortProg(3)">Leads Plat. <span class="sort-arrow">↕</span></th>
+          <th class="num" onclick="sortProg(4)">Leads CRM <span class="sort-arrow">↕</span></th>
+          <th class="num" onclick="sortProg(5)">Matrículas <span class="sort-arrow">↕</span></th>
+          <th class="num" onclick="sortProg(6)">% Conv. <span class="sort-arrow">↕</span></th>
         </tr>
       </thead>
       <tbody id="progBody"></tbody>
@@ -483,7 +484,16 @@ function toDateInput(d) {
 
 function parseMoney(str) {
   if (!str) return 0;
-  return parseFloat(str.toString().replace(/[^0-9.\-]/g, '').replace(',','.')) || 0;
+  let s = str.toString().trim().replace(/[$\s]/g, '');
+  if (s.includes(',')) {
+    // COP: dots=thousands, comma=decimal → "85.840,50"
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else {
+    // dot only: if last group has 3 digits it's a thousands sep → "85.840"
+    const parts = s.split('.');
+    if (parts.length === 2 && parts[1].length === 3) s = s.replace(/\./g, '');
+  }
+  return parseFloat(s) || 0;
 }
 
 function fmtCOP(n) {
@@ -557,25 +567,30 @@ async function fetchCSV(gid) {
 }
 
 function parseResumen(rows) {
-  // Find header row
+  // Find header row — look for "Campaña ID" or "Campaña"
   let headerIdx = -1;
   for (let i = 0; i < Math.min(5, rows.length); i++) {
-    if (rows[i][0] && rows[i][0].toLowerCase().includes('campa')) { headerIdx = i; break; }
+    const first = (rows[i][0] || '').toLowerCase();
+    if (first.includes('campa') || first.includes('fecha')) { headerIdx = i; break; }
   }
   if (headerIdx < 0) headerIdx = 0;
-  const header = rows[headerIdx].map(h => h.toLowerCase().trim());
 
-  const colIdx = (name) => header.findIndex(h => h.includes(name));
-  const iDate = 0;
-  const iMedio = colIdx('medio');
-  const iModalidad = colIdx('modalidad');
-  const iTipoProg = colIdx('tipo');
-  const iPrograma = colIdx('programa');
+  // FIXED COLUMNS (confirmed from sheet):
+  // A(0)=Fecha/CampañaID  B(1)=CampaignName  C(2)=Inversión  D(3)=Leads
+  // E(4)=Medio  F(5)=Modalidad  G(6)=TipoPrograma  H(7)=Programa
+  const iDate = 0, iInversion = 2, iLeads = 3;
+  const iMedio = 4, iModalidad = 5, iTipoProg = 6, iPrograma = 7;
 
-  // Find inversion and leads columns - look for numeric columns after Programa
-  // Usually: CampaignID, CampaignName, AdSetName, AdName, Medio, Modalidad, TipoProg, Programa, Inversion, Leads...
-  let iInversion = header.findIndex(h => h.includes('inversion') || h.includes('inversión') || h === 'spend' || h.includes('costo'));
-  let iLeads = header.findIndex(h => h.includes('leads') || h.includes('lead'));
+  // Normalize medio names
+  const normMedio = (s) => {
+    s = s.toLowerCase().trim();
+    if (s.includes('facebook') || s === 'fb') return 'facebook';
+    if (s.includes('google') || s.includes('gg')) return 'google';
+    if (s.includes('tiktok') || s.includes('tt')) return 'tiktok';
+    if (s.includes('programat') || s.includes('pg')) return 'programatica';
+    if (s.includes('youtube') || s.includes('yt')) return 'youtube';
+    return s || 'otros';
+  };
 
   const data = [];
   for (let i = headerIdx + 1; i < rows.length; i++) {
@@ -584,49 +599,27 @@ function parseResumen(rows) {
     const d = parseDate(r[iDate]);
     if (!d) continue;
 
-    let inv = 0, leads = 0;
-    // Try to find money and numeric values from columns after Programa
-    // Scan all columns for $ values
-    for (let j = 8; j < r.length; j++) {
-      const v = r[j] ? r[j].trim() : '';
-      if (v.startsWith('$') || (v.includes('.') && !isNaN(parseMoney(v)) && parseMoney(v) > 0)) {
-        if (inv === 0 && parseMoney(v) > 0) { inv = parseMoney(v); continue; }
-      }
-      if (!isNaN(parseFloat(v)) && parseFloat(v) >= 0 && !v.includes('$') && leads === 0 && parseFloat(v) !== inv) {
-        leads = parseFloat(v);
-      }
-    }
+    const modalidadRaw = (r[iModalidad] || '').trim();
+    // Normalise modalidad — only Pregrados, Posgrados, Branding; rest → General
+    let modalidad = modalidadRaw;
+    if (!['Pregrados','Posgrados','Branding'].includes(modalidad)) modalidad = 'General';
 
-    // More reliable: use fixed columns based on what we see in the sheet
-    // Col A=CampaignID(fecha), B=CampaignName, C=AdSetName, D=AdName, E=Medio, F=Modalidad, G=TipoProg, H=Programa
-    // Then investment/leads follow
-    const medioRaw = iMedio >= 0 ? (r[iMedio]||'').trim().toLowerCase() : '';
-    const modalidad = iModalidad >= 0 ? (r[iModalidad]||'').trim() : '';
-    const tipoProg = iTipoProg >= 0 ? (r[iTipoProg]||'').trim() : '';
-    const programa = iPrograma >= 0 ? (r[iPrograma]||'').trim() : '';
+    // Inversión: COP format — "$85.840" → strip $ and dots used as thousands sep
+    const invStr = (r[iInversion] || '').trim();
+    const inversion = parseMoney(invStr);
 
-    // Scan for investment ($ values)
-    let foundInv = 0, foundLeads = 0;
-    for (let j = Math.max(iPrograma+1, 8); j < Math.min(r.length, 20); j++) {
-      const v = (r[j]||'').trim();
-      const num = parseMoney(v);
-      if (num > 0 && (v.includes('$') || v.includes('.'))) {
-        if (foundInv === 0) { foundInv = num; continue; }
-      }
-      const plain = parseFloat(v.replace(',','.'));
-      if (!isNaN(plain) && plain >= 0 && !v.includes('$') && foundLeads === 0 && plain < 1000000) {
-        foundLeads = plain;
-      }
-    }
+    // Leads: Colombian comma decimal — "10,00" → 10
+    const leadsStr = (r[iLeads] || '').trim().replace(',', '.');
+    const leads = parseFloat(leadsStr) || 0;
 
     data.push({
       date: d,
-      medio: medioRaw || 'otros',
-      modalidad: modalidad || 'General',
-      tipoProg,
-      programa,
-      inversion: foundInv,
-      leads: foundLeads
+      medio: normMedio(r[iMedio] || ''),
+      modalidad,
+      tipoProg: (r[iTipoProg] || '').trim(),
+      programa: (r[iPrograma] || '').trim(),
+      inversion,
+      leads
     });
   }
   return data;
@@ -953,32 +946,54 @@ function renderInversionTable(resumen) {
 }
 
 // ── RENDER PROGRAMAS ──────────────────────────────────────────────────────
-function renderProgTable(resumen, mats) {
-  // Aggregate by programa
+const MODALIDAD_FILTERS = ['Todos', 'Pregrados', 'Posgrados', 'Branding'];
+
+function normPrograma(str) {
+  // Normalise program name for cross-sheet matching — lowercase, trim, remove double spaces
+  return (str || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function renderProgTable(resumen, mats, crm) {
+  // Aggregate by programa using normPrograma as key, store display name from resumen
   const map = {};
+
   resumen.forEach(r => {
-    const k = r.programa || '(Sin programa)';
-    if (!map[k]) map[k] = { modalidad: r.modalidad, inv: 0, leads: 0, mats: 0 };
+    const k = normPrograma(r.programa);
+    if (!k) return;
+    if (!map[k]) map[k] = { display: r.programa, modalidad: r.modalidad, inv: 0, leads: 0, mats: 0, crmLeads: 0 };
     map[k].inv += r.inversion;
     map[k].leads += r.leads;
   });
+
+  // Homologate matrículas by programa name
   mats.forEach(r => {
-    const k = r.programa || '(Sin programa)';
-    if (!map[k]) map[k] = { modalidad: r.tipoProg || '', inv: 0, leads: 0, mats: 0 };
+    const k = normPrograma(r.programa);
+    if (!k) return;
+    if (!map[k]) map[k] = { display: r.programa, modalidad: '', inv: 0, leads: 0, mats: 0, crmLeads: 0 };
     map[k].mats += r.matriculas;
   });
 
-  // Modalidad filters
-  const modalidades = ['Todos', ...new Set(Object.values(map).map(v => v.modalidad).filter(Boolean)).values()];
-  const filterDiv = document.getElementById('modalidadFilters');
-  if (filterDiv.children.length === 0) {
-    filterDiv.innerHTML = modalidades.map(m =>
-      `<button class="fbtn ${m === activeModalidad ? 'active' : ''}" onclick="setModalidad('${m}')">${m}</button>`
-    ).join('');
-  }
+  // Homologate CRM leads by programa name
+  crm.forEach(r => {
+    const k = normPrograma(r.programa);
+    if (!k) return;
+    if (!map[k]) map[k] = { display: r.programa, modalidad: '', inv: 0, leads: 0, mats: 0, crmLeads: 0 };
+    map[k].crmLeads += r.aspirantes;
+  });
 
-  let rows = Object.entries(map).map(([prog, v]) => ({
-    prog, modalidad: v.modalidad, inv: v.inv, leads: v.leads, mats: v.mats,
+  // Fixed filter buttons — always Todos / Pregrados / Posgrados / Branding
+  const filterDiv = document.getElementById('modalidadFilters');
+  filterDiv.innerHTML = MODALIDAD_FILTERS.map(m =>
+    `<button class="fbtn ${m === activeModalidad ? 'active' : ''}" onclick="setModalidad('${m}')">${m}</button>`
+  ).join('');
+
+  let rows = Object.values(map).map(v => ({
+    prog: v.display,
+    modalidad: v.modalidad,
+    inv: v.inv,
+    leads: v.leads,
+    crmLeads: v.crmLeads,
+    mats: v.mats,
     conv: v.leads > 0 ? v.mats / v.leads : 0
   }));
 
@@ -989,10 +1004,11 @@ function renderProgTable(resumen, mats) {
     (a,b) => progSortAsc ? a.modalidad.localeCompare(b.modalidad) : b.modalidad.localeCompare(a.modalidad),
     (a,b) => progSortAsc ? a.inv-b.inv : b.inv-a.inv,
     (a,b) => progSortAsc ? a.leads-b.leads : b.leads-a.leads,
+    (a,b) => progSortAsc ? a.crmLeads-b.crmLeads : b.crmLeads-a.crmLeads,
     (a,b) => progSortAsc ? a.mats-b.mats : b.mats-a.mats,
     (a,b) => progSortAsc ? a.conv-b.conv : b.conv-a.conv
   ];
-  rows.sort(sortFns[progSortCol]);
+  rows.sort(sortFns[Math.min(progSortCol, sortFns.length - 1)]);
 
   document.getElementById('progBody').innerHTML = rows.map(r => {
     const pct = r.conv * 100;
@@ -1000,10 +1016,11 @@ function renderProgTable(resumen, mats) {
     if (pct >= 8) badgeCls = 'badge-success';
     else if (pct < 3 && r.leads > 0) badgeCls = 'badge-danger';
     return `<tr>
-      <td>${r.prog}</td>
+      <td>${r.prog || '—'}</td>
       <td>${r.modalidad || '—'}</td>
       <td class="num">${r.inv > 0 ? fmtCOP(r.inv) : '—'}</td>
-      <td class="num">${fmtNum(r.leads)}</td>
+      <td class="num">${r.leads > 0 ? fmtNum(r.leads) : '—'}</td>
+      <td class="num">${r.crmLeads > 0 ? fmtNum(r.crmLeads) : '—'}</td>
       <td class="num">${fmtNum(r.mats)}</td>
       <td class="num">${r.leads > 0 ? `<span class="badge ${badgeCls}">${pct.toFixed(1)}%</span>` : '—'}</td>
     </tr>`;
@@ -1012,13 +1029,11 @@ function renderProgTable(resumen, mats) {
 
 function setModalidad(m) {
   activeModalidad = m;
-  document.querySelectorAll('#modalidadFilters .fbtn').forEach(b => {
-    b.classList.toggle('active', b.textContent === m);
-  });
   const range = getDateRange();
   const resumenF = filterData(rawResumen, range);
   const matsF = filterData(rawMatriculas, range);
-  renderProgTable(resumenF, matsF);
+  const crmF = filterData(rawCRM, range);
+  renderProgTable(resumenF, matsF, crmF);
 }
 
 function sortProg(col) {
@@ -1049,7 +1064,7 @@ function renderAll() {
   renderMedioTable(resumenF);
   renderTrendChart(resumenF, resumenB);
   renderInversionTable(resumenF);
-  renderProgTable(resumenF, matsF);
+  renderProgTable(resumenF, matsF, crmF);
 }
 
 // ── QUICK DATES ───────────────────────────────────────────────────────────
