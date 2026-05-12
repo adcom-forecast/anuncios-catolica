@@ -162,7 +162,7 @@ const STATIC_DATA = {"programa": [{"_periodo": "2025-3", "Programa": "Campaña B
 const MEDIO_ICONS = {"Google": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath fill='%23EA4335' d='M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z'/%3E%3Cpath fill='%234285F4' d='M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z'/%3E%3Cpath fill='%23FBBC05' d='M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z'/%3E%3Cpath fill='%2334A853' d='M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z'/%3E%3C/svg%3E", "Meta": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Cpath fill='%231877F2' d='M48 24C48 10.745 37.255 0 24 0S0 10.745 0 24c0 11.979 8.776 21.908 20.25 23.708V30.937h-6.094V24H20.25v-5.288c0-6.014 3.582-9.337 9.066-9.337 2.625 0 5.371.469 5.371.469v5.907h-3.026c-2.979 0-3.911 1.85-3.911 3.748V24h6.656l-1.064 6.937H27.75v16.771C39.224 45.908 48 35.979 48 24z'/%3E%3C/svg%3E", "Tiktok": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect fill='%23010101' width='48' height='48' rx='10'/%3E%3Cpath fill='%2369C9D0' d='M31 10h-5v19.5a4.5 4.5 0 1 1-4.5-4.5c.3 0 .5 0 .5.1V20a9.5 9.5 0 1 0 9.5 9.5V18.9A16.6 16.6 0 0 0 41 20v-5a11.6 11.6 0 0 1-10-5z'/%3E%3Cpath fill='%23EE1D52' d='M41 20v-5a11.6 11.6 0 0 1-10-5h-5v3a16.6 16.6 0 0 0 10 5.9z' opacity='.7'/%3E%3Cpath fill='white' d='M31 10h-5v19.5a4.5 4.5 0 1 1-4.5-4.5c.3 0 .5 0 .5.1V20a9.5 9.5 0 1 0 9.5 9.5V18.9A16.6 16.6 0 0 0 41 20v-5a11.6 11.6 0 0 1-10-5z' opacity='.08'/%3E%3C/svg%3E", "Programatica": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Crect fill='%230F9D58' width='48' height='48' rx='10'/%3E%3Ccircle cx='24' cy='24' r='14' fill='none' stroke='white' stroke-width='3'/%3E%3Ccircle cx='24' cy='24' r='7' fill='none' stroke='white' stroke-width='3'/%3E%3Ccircle cx='24' cy='24' r='2.5' fill='white'/%3E%3Cline x1='10' y1='24' x2='14' y2='24' stroke='white' stroke-width='2.5'/%3E%3Cline x1='34' y1='24' x2='38' y2='24' stroke='white' stroke-width='2.5'/%3E%3Cline x1='24' y1='10' x2='24' y2='14' stroke='white' stroke-width='2.5'/%3E%3Cline x1='24' y1='34' x2='24' y2='38' stroke='white' stroke-width='2.5'/%3E%3C/svg%3E"};
 
 const SSID = '1Zl3K7tvYj3FC6RzkgNux4n5SScDQ5E3rAFABum2cIuM';
-const GID = {programa:'11791629',medio:'1637463126',metas:'1164696908'};
+const GID = {programa:'11791629',medio:'1637463126',mensual:'80778682'};
 
 const PERIODOS = ['2025-3','2026-1','2026-3','2027-1','2027-3'];
 const PERIODO_COLOR = {'2025-3':'#3D85C8','2026-1':'#1E7B4C','2026-3':'#8B5CF6','2027-1':'#C0392B','2027-3':'#D4A017'};
@@ -206,16 +206,80 @@ window.addEventListener('load',()=>{
   document.getElementById('lastUpd').textContent='Datos del Excel';
 });
 
+// ═══ CSV PARSER ═══
+function parseCSV(text){
+  const lines = text.trim().split('\n');
+  if(lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h=>h.replace(/^"|"$/g,'').trim());
+  return lines.slice(1).map(line=>{
+    // Handle quoted fields with commas inside
+    const cols = [];
+    let cur = '', inQ = false;
+    for(let i=0;i<line.length;i++){
+      const c = line[i];
+      if(c==='"'){ inQ=!inQ; }
+      else if(c===','&&!inQ){ cols.push(cur); cur=''; }
+      else { cur+=c; }
+    }
+    cols.push(cur);
+    const row = {};
+    headers.forEach((h,i)=>{
+      const v = (cols[i]||'').replace(/^"|"$/g,'').trim();
+      // Try numeric conversion
+      const n = v.replace(/[$,%\s]/g,'').replace(/\./g,'').replace(',','.');
+      row[h] = isNaN(n)||n==='' ? v : Number(n);
+    });
+    return row;
+  });
+}
+
 // ═══ FETCH SHEETS ═══
 function tryFetchSheets(){
   const dot=document.getElementById('syncDot');
   const btn=document.getElementById('syncBtn');
-  dot.classList.add('spin');btn.disabled=true;
-  fetch(`https://docs.google.com/spreadsheets/d/${SSID}/export?format=csv&gid=${GID.programa}`)
-    .then(r=>{if(!r.ok)throw new Error('El Sheets no es público (HTTP '+r.status+'). Ve a Archivo → Compartir → Cualquier persona con el enlace → Lector.');return r.text();})
-    .then(()=>alert('¡Sheets público! Recarga para usar datos en vivo.'))
-    .catch(e=>alert('⚠️ '+e.message+'\n\nEl dashboard usa datos del Excel por ahora.'))
-    .finally(()=>{dot.classList.remove('spin');btn.disabled=false;document.getElementById('lastUpd').textContent='Act. '+new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});});
+  dot.classList.add('spin'); btn.disabled=true;
+  
+  const base = `https://docs.google.com/spreadsheets/d/${SSID}/export?format=csv&gid=`;
+  
+  Promise.all([
+    fetch(base+GID.programa).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.text();}),
+    fetch(base+GID.medio).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.text();}),
+    fetch(base+GID.mensual).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.text();})
+  ])
+  .then(([csvProg, csvMedio, csvMensual])=>{
+    const newProg    = parseCSV(csvProg);
+    const newMedio   = parseCSV(csvMedio);
+    const newMensual = parseCSV(csvMensual);
+    
+    if(!newProg.length) throw new Error('Pestaña Programa vacía o sin datos.');
+    
+    // Update global DATA
+    DATA.programa = newProg;
+    DATA.medio    = newMedio;
+    DATA.mensual  = newMensual;
+    
+    // Re-render everything
+    rendered = {};
+    Object.values(charts).forEach(c=>{ try{c.destroy();}catch(e){} });
+    charts = {};
+    
+    updateHeroKPIs(activeFilter);
+    
+    if(activeTab==='general'){ renderGeneral(); rendered['general']=true; }
+    else {
+      const pid = activeFilter;
+      const kid = 'p'+pid.replace('-','_');
+      document.getElementById('content-'+kid).innerHTML='';
+      renderPeriodo(pid, kid);
+      rendered[kid]=true;
+    }
+    
+    document.getElementById('lastUpd').textContent='Act. '+new Date().toLocaleTimeString('es-CO',{hour:'2-digit',minute:'2-digit'});
+  })
+  .catch(e=>{
+    alert('⚠️ No se pudo leer el Sheets: '+e.message+'\n\nVerifica que esté publicado como "Cualquier persona con el enlace → Lector".');
+  })
+  .finally(()=>{ dot.classList.remove('spin'); btn.disabled=false; });
 }
 
 // ═══ TAB SWITCH ═══
