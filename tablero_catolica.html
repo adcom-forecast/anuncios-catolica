@@ -259,17 +259,31 @@ function fmtN(n){ if(n===null||n===undefined||isNaN(n)) return '⏳'; if(n===0) 
 function fmtNz(n){ if(!n||isNaN(n)) return '—'; return Math.round(n).toLocaleString('es-CO'); }
 function fmtP(n){ if(n===null||n===undefined||isNaN(n)) return '⏳'; return n.toFixed(1)+'%'; }
 
-// Limpiar comillas extra que devuelve gviz
-function cleanRows(rows){
-  if(!rows||!rows.length) return [];
-  return rows.map(r=>{
-    const c={};
-    Object.keys(r).forEach(k=>{
-      const nk=k.replace(/^"+|"+$/g,'').trim();
-      c[nk]=typeof r[k]==='string'?r[k].replace(/^"+|"+$/g,'').trim():r[k];
-    });
-    return c;
-  });
+// Parsear inversión: puede venir "$14.886" o "14886" o "14,886"
+function parseInv(val){
+  if(!val) return 0;
+  // Quitar símbolo $, espacios y puntos de miles (Colombia usa . como separador de miles)
+  const clean = String(val).replace(/[$\s]/g,'').replace(/\./g,'').replace(',','.');
+  return parseFloat(clean)||0;
+}
+
+// Parsear leads/número entero
+function parseNum(val){
+  if(!val) return 0;
+  const clean = String(val).replace(/[$\s,]/g,'').replace(',','.');
+  return parseFloat(clean)||0;
+}
+
+// Parsear fecha: viene "1/01/2025" o "01/01/2025" → "2025-01"
+function parseMes(val){
+  if(!val) return '';
+  // Formato d/MM/YYYY o dd/MM/YYYY
+  const m = String(val).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m) return m[3]+'-'+m[2].padStart(2,'0');
+  // Si ya viene YYYY-MM-DD
+  const m2 = String(val).match(/(\d{4})-(\d{2})/);
+  if(m2) return m2[1]+'-'+m2[2];
+  return String(val).substring(0,7);
 }
 
 // ── CARGA ─────────────────────────────────────────────────────────────────────
@@ -279,62 +293,106 @@ function refreshData(){
   let done=0;
   const check=()=>{ if(++done===3){ processAndRender(); showLoading(false); } };
 
-  Papa.parse(URL_RG,{download:true,header:true,skipEmptyLines:true,
-    complete:r=>{ RAW_RG=cleanRows(r.data); console.log('✅ RG:',RAW_RG.length,'cols:',Object.keys(RAW_RG[0]||{})); check(); },
+  // header:false → acceso por índice posicional, sin depender de nombres de columna
+  Papa.parse(URL_RG,{download:true,header:false,skipEmptyLines:true,
+    complete:r=>{
+      RAW_RG=r.data;
+      // Eliminar fila de encabezado
+      if(RAW_RG.length && String(RAW_RG[0][0]).toLowerCase().includes('campaña')) RAW_RG.shift();
+      console.log('✅ RG filas:',RAW_RG.length,'| muestra col[0..8]:',RAW_RG[0]);
+      check();
+    },
     error:e=>{ console.error('❌ RG:',e); check(); }
   });
-  Papa.parse(URL_LEADS,{download:true,header:true,skipEmptyLines:true,
-    complete:r=>{ RAW_LEADS=cleanRows(r.data); console.log('✅ LEADS:',RAW_LEADS.length); check(); },
+  Papa.parse(URL_LEADS,{download:true,header:false,skipEmptyLines:true,
+    complete:r=>{
+      RAW_LEADS=r.data;
+      if(RAW_LEADS.length && String(RAW_LEADS[0][0]).toLowerCase().includes('fecha')) RAW_LEADS.shift();
+      console.log('✅ LEADS filas:',RAW_LEADS.length,'| muestra:',RAW_LEADS[0]);
+      check();
+    },
     error:e=>{ console.error('❌ LEADS:',e); check(); }
   });
-  Papa.parse(URL_MAT,{download:true,header:true,skipEmptyLines:true,
-    complete:r=>{ RAW_MAT=cleanRows(r.data); console.log('✅ MAT:',RAW_MAT.length); check(); },
+  Papa.parse(URL_MAT,{download:true,header:false,skipEmptyLines:true,
+    complete:r=>{
+      RAW_MAT=r.data;
+      if(RAW_MAT.length && String(RAW_MAT[0][0]).toLowerCase().includes('fecha')) RAW_MAT.shift();
+      console.log('✅ MAT filas:',RAW_MAT.length,'| muestra:',RAW_MAT[0]);
+      check();
+    },
     error:e=>{ console.error('❌ MAT:',e); check(); }
   });
 }
 
 // ── PROCESAR ──────────────────────────────────────────────────────────────────
+// COLUMNAS RG (índice 0-based):
+//   [0] Campaña ID  → fecha  (formato d/MM/YYYY)
+//   [1] Campaign Name
+//   [2] Ad Set Name → INVERSIÓN
+//   [3] Ad Name     → LEADS PAUTA
+//   [4] Medio
+//   [5] Modalidad
+//   [6] Tipo programa
+//   [7] Programa
+//
+// COLUMNAS LEADS/MAT (índice 0-based):
+//   [0] Fecha de Creación
+//   [1] Codigo de programa
+//   [2] Fuente
+//   [3] Medio
+//   [4] Programa
+//   [5] Tipo de programa
+//   [6] Periodo de interés
+//   [7] ETAPA
+//   [8] ASPIRANTES
+//   [9] PRE-INSCRITOS
+//   [10] INSCRITOS
+//   [11] ADMITIDOS
+//   [12] MATRICULAS
+//   [13] semana
+
 function processAndRender(){
   const fDesde=$('f-desde')?.value||'';
   const fHasta=$('f-hasta')?.value||'';
   const fMedio=$('f-medio')?.value||'';
-  const fModal=$('f-modalidad')?.value||'';
-  const fTipo=$('f-tipo')?.value||'';
 
   if(!RAW_RG.length){ renderEmpty(); return; }
 
-  // Detectar nombre de columna fecha (puede venir con encoding raro)
-  const firstKey = Object.keys(RAW_RG[0]||{})[0];
-  console.log('Primera columna RG:', firstKey);
-
   const rgRows = RAW_RG.map(r=>{
-    const fecha = r['Campaña ID']||r[firstKey]||'';
     return {
-      mes:    String(fecha).substring(0,7),
-      medio:  (r['Medio']||'').toLowerCase().trim(),
-      modal:  r['Modalidad']||'',
-      tipo:   r['Tipo programa']||'',
-      prog:   r['Programa']||'',
-      inv:    parseFloat(String(r['Ad Set Name']||'0').replace(/[$,]/g,''))||0,
-      leadsP: parseFloat(String(r['Ad Name']||'0').replace(/[$,]/g,''))||0
+      mes:    parseMes(r[0]),                           // Col A: Campaña ID = fecha
+      medio:  String(r[4]||'').toLowerCase().trim(),    // Col E: Medio
+      modal:  String(r[5]||'').trim(),                  // Col F: Modalidad
+      tipo:   String(r[6]||'').trim(),                  // Col G: Tipo programa
+      prog:   String(r[7]||'').trim(),                  // Col H: Programa
+      inv:    parseInv(r[2]),                           // Col C: Ad Set Name = Inversión
+      leadsP: parseNum(r[3])                            // Col D: Ad Name = Leads Pauta
     };
-  });
+  }).filter(r=>r.mes); // descartar filas sin fecha
+
+  const fDesdeMes = fDesde ? fDesde.substring(0,7) : '';
+  const fHastaMes = fHasta ? fHasta.substring(0,7) : '';
 
   const filtered = rgRows.filter(r=>{
-    if(fDesde && r.mes < fDesde.substring(0,7)) return false;
-    if(fHasta && r.mes > fHasta.substring(0,7)) return false;
+    if(fDesdeMes && r.mes < fDesdeMes) return false;
+    if(fHastaMes && r.mes > fHastaMes) return false;
     if(fMedio && r.medio !== fMedio) return false;
     return true;
   });
 
-  const filtLeads = RAW_LEADS.filter(r=>!fMedio||(r['Medio']||'').toLowerCase()===fMedio);
-  const filtMat   = RAW_MAT.filter(r=>!fMedio||(r['Medio']||'').toLowerCase()===fMedio);
+  // LEADS/MAT: filtrar por medio si aplica
+  // Col [3] = Medio en LEADS/MAT
+  const filtLeads = RAW_LEADS.filter(r=>!fMedio||(String(r[3]||'').toLowerCase()===fMedio));
+  const filtMat   = RAW_MAT.filter(r=>!fMedio||(String(r[3]||'').toLowerCase()===fMedio));
 
   const inv_total   = filtered.reduce((a,r)=>a+r.inv,0);
   const leads_pauta = filtered.reduce((a,r)=>a+r.leadsP,0);
   const leads_crm   = filtLeads.length;
-  const admitidos   = filtMat.reduce((a,r)=>a+(parseInt(r['ADMITIDOS'])||0),0);
-  const matriculas  = filtMat.reduce((a,r)=>a+(parseInt(r['MATRICULAS'])||0),0);
+  // Col [11] = ADMITIDOS, Col [12] = MATRICULAS
+  const admitidos   = filtMat.reduce((a,r)=>a+(parseInt(r[11])||0),0);
+  const matriculas  = filtMat.reduce((a,r)=>a+(parseInt(r[12])||0),0);
+
+  console.log('📊 Totales → Inv:',inv_total,'| Leads Pauta:',leads_pauta,'| Leads CRM:',leads_crm,'| Admitidos:',admitidos,'| Matrículas:',matriculas);
 
   renderKPIs({inv_total,leads_pauta,leads_crm,admitidos,matriculas});
 
@@ -343,8 +401,8 @@ function processAndRender(){
     const rm  = filtered.filter(r=>r.medio===m);
     const inv = rm.reduce((a,r)=>a+r.inv,0);
     const lp  = rm.reduce((a,r)=>a+r.leadsP,0);
-    const lc  = filtLeads.filter(r=>(r['Medio']||'').toLowerCase()===m).length;
-    const mt  = filtMat.filter(r=>(r['Medio']||'').toLowerCase()===m).reduce((a,r)=>a+(parseInt(r['MATRICULAS'])||0),0);
+    const lc  = filtLeads.filter(r=>String(r[3]||'').toLowerCase()===m).length;
+    const mt  = filtMat.filter(r=>String(r[3]||'').toLowerCase()===m).reduce((a,r)=>a+(parseInt(r[12])||0),0);
     return {medio:m,inv,leads_pauta:lp,leads_crm:lc,matriculas:mt,
       cpl_pauta:lp?inv/lp:0, cpl_crm:lc?inv/lc:0, conv_pct:lc?mt/lc*100:0};
   });
@@ -369,27 +427,29 @@ function processAndRender(){
   });
 
   // Por programa
+  // Col [4] = Programa en LEADS/MAT
   const progMap={};
   filtered.forEach(r=>{
-    if(!r.prog||r.prog.startsWith('Campaña')) return;
+    if(!r.prog||r.prog===''||r.prog.startsWith('Campaña')) return;
     if(!progMap[r.prog]) progMap[r.prog]={
       Programa:r.prog, Modalidad:r.modal, Tipo:r.tipo,
       inv_total:0, inv_facebook:0, inv_google:0, inv_tiktok:0, inv_programatica:0, leads_pauta:0
     };
     const p=progMap[r.prog];
     p.inv_total+=r.inv;
-    p['inv_'+r.medio]=(p['inv_'+r.medio]||0)+r.inv;
+    if(MEDIOS.includes(r.medio)) p['inv_'+r.medio]=(p['inv_'+r.medio]||0)+r.inv;
     p.leads_pauta+=r.leadsP;
   });
 
   window._progData = Object.values(progMap).map(p=>{
-    const la = RAW_LEADS.filter(r=>r['Programa']===p.Programa);
-    const ma = RAW_MAT.filter(r=>r['Programa']===p.Programa);
+    // Buscar en LEADS/MAT por Col[4] = Programa
+    const la = RAW_LEADS.filter(r=>String(r[4]||'').trim()===p.Programa);
+    const ma = RAW_MAT.filter(r=>String(r[4]||'').trim()===p.Programa);
     const lc = la.length;
-    const mt = ma.reduce((a,r)=>a+(parseInt(r['MATRICULAS'])||0),0);
-    const ad = ma.reduce((a,r)=>a+(parseInt(r['ADMITIDOS'])||0),0);
-    const lc_fb = la.filter(r=>(r['Medio']||'').toLowerCase()==='facebook').length;
-    const lc_go = la.filter(r=>(r['Medio']||'').toLowerCase()==='google').length;
+    const mt = ma.reduce((a,r)=>a+(parseInt(r[12])||0),0);
+    const ad = ma.reduce((a,r)=>a+(parseInt(r[11])||0),0);
+    const lc_fb = la.filter(r=>String(r[3]||'').toLowerCase()==='facebook').length;
+    const lc_go = la.filter(r=>String(r[3]||'').toLowerCase()==='google').length;
     return {...p, leads_crm:lc, admitidos:ad, matriculas:mt,
       crm_facebook:lc_fb, crm_google:lc_go,
       cpl_pauta: p.leads_pauta?p.inv_total/p.leads_pauta:0,
@@ -398,7 +458,9 @@ function processAndRender(){
   });
 
   const ma=window._mesData;
-  $('period-tag').textContent='📅 '+($('f-desde').value||ma[0]?.mes||'')+' → '+($('f-hasta').value||ma[ma.length-1]?.mes||'');
+  const desde = fDesde||ma[0]?.mes||'';
+  const hasta  = fHasta||ma[ma.length-1]?.mes||'';
+  $('period-tag').textContent='📅 '+desde+' → '+hasta;
   $('last-update').textContent='Act: '+new Date().toLocaleTimeString('es-CO');
   renderMesTable();
   renderProgTable();
@@ -417,7 +479,6 @@ function renderKPIs(k){
   const cpl_p=k.leads_pauta?k.inv_total/k.leads_pauta:0;
   const cpl_c=k.leads_crm?k.inv_total/k.leads_crm:0;
   const conv=k.leads_crm?k.matriculas/k.leads_crm*100:0;
-  const ratio=k.leads_pauta?k.leads_crm/k.leads_pauta*100:0;
   const cards=[
     {label:'Inversión Total',    value:fmtCOP(k.inv_total),  sub:'Pauta digital total',  accent:true},
     {label:'Leads Pauta',        value:fmtNz(k.leads_pauta), sub:'Generados por ads'},
@@ -475,7 +536,7 @@ function setMesTab(tab,btn){
 
 function renderMesTable(){
   const rows=window._mesData||[];
-  if(!rows.length){ $('mes-table').innerHTML='<div class="no-data">Sin datos — cargando...</div>'; return; }
+  if(!rows.length){ $('mes-table').innerHTML='<div style="padding:24px;text-align:center;color:#aaa">Sin datos</div>'; return; }
   const isInv=mesTab==='inv'; const pre=isInv?'inv_':'leads_';
   const tots={facebook:0,google:0,tiktok:0,programatica:0,total:0};
   const tbody=rows.map(r=>{
@@ -586,12 +647,11 @@ function showLoading(on){ $('loading-bar').classList.toggle('active',on); if(!on
 
 window.addEventListener('DOMContentLoaded',()=>{
   const h=new Date();
-  $('f-desde').value=h.getFullYear()+'-02-01';
+  $('f-desde').value=h.getFullYear()+'-01-01';
   $('f-hasta').value=h.getFullYear()+'-'+String(h.getMonth()+1).padStart(2,'0')+'-'+String(h.getDate()).padStart(2,'0');
   $('period-tag').textContent='📅 Cargando datos...';
   refreshData();
 });
-
 </script>
 </body>
 </html>
