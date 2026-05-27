@@ -404,6 +404,13 @@ function processAndRender(){
   const matriculas  = filtMat.reduce((a,r)=>a+(parseInt(r[12])||0),0);
 
   console.log('📊 Totales → Inv:',inv_total,'Leads Pauta:',leads_pauta,'Leads CRM:',leads_crm,'Admitidos:',admitidos,'Matrículas:',matriculas);
+  // Debug por modalidad
+  ['Pregrados','Posgrados','Branding'].forEach(m=>{
+    const inv_m = filtered.filter(r=>r.modal===m).reduce((a,r)=>a+r.inv,0);
+    console.log('  ',m,'→ Inv:',inv_m);
+  });
+  const sinModal = filtered.filter(r=>!r.modal||r.modal==='').reduce((a,r)=>a+r.inv,0);
+  console.log('  Sin modalidad → Inv:',sinModal);
 
   // KPIs por modalidad
   const modales = ['Pregrados','Posgrados','Branding'];
@@ -663,6 +670,18 @@ function toggleMes(mes, row){
 }
 
 // ── RENDER TABLAS POR PROGRAMA ────────────────────────────────────────────────
+// Sort state por grupo
+const progSort = {
+  Pregrados:{col:'inv_total',dir:-1},
+  Posgrados:{col:'inv_total',dir:-1},
+  Branding: {col:'inv_total',dir:-1},
+};
+function sortProgGroup(gkey, col){
+  const s = progSort[gkey];
+  if(s.col===col) s.dir*=-1; else{s.col=col;s.dir=-1;}
+  renderAllProgTables();
+}
+
 function renderAllProgTables(){
   const search = ($('prog-search')?.value||'').toLowerCase();
   const grupos = [
@@ -672,22 +691,42 @@ function renderAllProgTables(){
   ];
 
   $('prog-tables').innerHTML = grupos.map(g=>{
+    const s = progSort[g.key];
     let rows = (window._progData||[])
       .filter(p=>p.Modalidad===g.key)
       .filter(p=>!search||p.Programa.toLowerCase().includes(search));
-    rows.sort((a,b)=>(b[progSortCol]||0)-(a[progSortCol]||0));
 
-    const tI=rows.reduce((a,r)=>a+(r.inv_total||0),0);
-    const tLP=rows.reduce((a,r)=>a+(r.leads_pauta||0),0);
-    const tLC=rows.reduce((a,r)=>a+(r.leads_crm||0),0);
-    const tMt=rows.reduce((a,r)=>a+(r.matriculas||0),0);
+    rows.sort((a,b)=>{
+      const av=a[s.col]||0, bv=b[s.col]||0;
+      return typeof av==='string' ? av.localeCompare(bv)*s.dir : (av-bv)*s.dir;
+    });
+
+    // Totales de todas las columnas
+    const tI   = rows.reduce((a,r)=>a+(r.inv_total||0),0);
+    const tFB  = rows.reduce((a,r)=>a+(r.inv_facebook||0),0);
+    const tGO  = rows.reduce((a,r)=>a+(r.inv_google||0),0);
+    const tPRG = rows.reduce((a,r)=>a+(r.inv_programatica||0),0);
+    const tLP  = rows.reduce((a,r)=>a+(r.leads_pauta||0),0);
+    const tLC  = rows.reduce((a,r)=>a+(r.leads_crm||0),0);
+    const tFBc = rows.reduce((a,r)=>a+(r.crm_facebook||0),0);
+    const tGOc = rows.reduce((a,r)=>a+(r.crm_google||0),0);
+    const tMt  = rows.reduce((a,r)=>a+(r.matriculas||0),0);
 
     const badge=v=>`<span class="badge b-${v||'General'}">${v||'—'}</span>`;
     const isBranding = g.key==='Branding';
 
+    // Helper: cabecera ordenable
+    const th=(col,lbl,isNum,style)=>{
+      const act=s.col===col;
+      const cls=`${isNum?'num ':''} sortable${act?' sort-active':''}`;
+      const arrow=act?(s.dir>0?' ↑':' ↓'):'';
+      return `<th class="${cls.trim()}" ${style?`style="${style}"`:''}
+        onclick="sortProgGroup('${g.key}','${col}')">${lbl}${arrow}</th>`;
+    };
+
     const tbody = rows.map(p=>{
       const baseRow = `
-        <td style="min-width:160px;font-weight:600" title="${p.Programa}">${p.Programa}</td>
+        <td style="min-width:160px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px" title="${p.Programa}">${p.Programa}</td>
         <td>${badge(p.Tipo)}</td>
         <td class="num bold">${fmtCOP(p.inv_total)}</td>
         <td class="num" style="color:#1877F2">${fmtCOP(p.inv_facebook)}</td>
@@ -709,28 +748,35 @@ function renderAllProgTables(){
       ? `<tr class="total-row">
           <td colspan="2">TOTAL (${rows.length})</td>
           <td class="num yellow">${fmtCOP(tI)}</td>
-          <td class="num"></td><td class="num"></td><td class="num"></td>
+          <td class="num yellow">${fmtCOP(tFB)}</td>
+          <td class="num yellow">${fmtCOP(tGO)}</td>
+          <td class="num yellow">${fmtCOP(tPRG)}</td>
         </tr>`
       : `<tr class="total-row">
           <td colspan="2">TOTAL (${rows.length})</td>
           <td class="num yellow">${fmtCOP(tI)}</td>
-          <td class="num"></td><td class="num"></td><td class="num"></td>
+          <td class="num yellow">${fmtCOP(tFB)}</td>
+          <td class="num yellow">${fmtCOP(tGO)}</td>
+          <td class="num yellow">${fmtCOP(tPRG)}</td>
           <td class="num yellow">${fmtNz(tLP)}</td>
           <td class="num yellow">${fmtCOP(tLP?tI/tLP:0)}</td>
           <td class="num yellow">${fmtNz(tLC)}</td>
-          <td class="num"></td><td class="num"></td>
+          <td class="num yellow">${fmtNz(tFBc)}</td>
+          <td class="num yellow">${fmtNz(tGOc)}</td>
           <td class="num yellow">${fmtCOP(tLC?tI/tLC:0)}</td>
           <td class="num yellow">${fmtNz(tMt)}</td>
           <td class="num yellow">${fmtP(tLC?tMt/tLC*100:0)}</td>
         </tr>`;
 
     const extraHeaders = isBranding ? '' : `
-              <th class="num">Leads Pauta</th><th class="num">CPL Pauta</th>
-              <th class="num">Leads CRM</th>
-              <th class="num" style="color:#1877F2">CRM FB</th>
-              <th class="num" style="color:#EA4335">CRM GO</th>
-              <th class="num">CPL CRM</th>
-              <th class="num">Matrículas</th><th class="num">Conv%</th>`;
+      ${th('leads_pauta','Leads Pauta',true)}
+      ${th('cpl_pauta','CPL Pauta',true,'color:#B8860B')}
+      ${th('leads_crm','Leads CRM',true)}
+      <th class="num sortable" style="color:#1877F2" onclick="sortProgGroup('${g.key}','crm_facebook')">CRM FB</th>
+      <th class="num sortable" style="color:#EA4335" onclick="sortProgGroup('${g.key}','crm_google')">CRM GO</th>
+      ${th('cpl_crm','CPL CRM',true)}
+      ${th('matriculas','Matrículas',true)}
+      ${th('conv_pct','Conv%',true)}`;
 
     return `<div class="prog-section">
       <div class="prog-section-title ${g.cls}">${g.label} — ${rows.length} programas · ${fmtCOP(tI)}</div>
@@ -738,11 +784,12 @@ function renderAllProgTables(){
         <div class="table-scroll">
           <table>
             <thead><tr>
-              <th>Programa</th><th>Tipo</th>
-              <th class="num">Inv. Total</th>
-              <th class="num" style="color:#1877F2">FB</th>
-              <th class="num" style="color:#EA4335">GO</th>
-              <th class="num" style="color:#6366F1">PROG</th>
+              ${th('Programa','Programa',false)}
+              ${th('Tipo','Tipo',false)}
+              ${th('inv_total','Inv. Total',true)}
+              <th class="num sortable" style="color:#1877F2" onclick="sortProgGroup('${g.key}','inv_facebook')">FB</th>
+              <th class="num sortable" style="color:#EA4335" onclick="sortProgGroup('${g.key}','inv_google')">GO</th>
+              <th class="num sortable" style="color:#6366F1" onclick="sortProgGroup('${g.key}','inv_programatica')">PROG</th>
               ${extraHeaders}
             </tr></thead>
             <tbody>${tbody}${totRow}</tbody>
